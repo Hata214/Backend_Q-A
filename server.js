@@ -20,6 +20,7 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
         'https://frontend-k3i60whce-hata214s-projects.vercel.app',
         'https://frontend-dgz6ytr5-hata214s-projects.vercel.app',
         'https://frontend-rust-two-28.vercel.app',
+        'https://frontend-ianvfub6o-hata214s-projects.vercel.app',
         'http://localhost:8000'
     ];
 

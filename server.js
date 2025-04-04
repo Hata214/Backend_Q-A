@@ -17,9 +17,9 @@ connectDB();
 const allowedOrigins = process.env.ALLOWED_ORIGINS
     ? process.env.ALLOWED_ORIGINS.split(',')
     : [
-        'https://frontend-l2rpam0hs-hata214s-projects.vercel.app',
-        'http://localhost:8000',
-        'http://localhost:3000'
+        'https://frontend-k3i60whce-hata214s-projects.vercel.app',
+        'https://frontend-dgz6ytr5-hata214s-projects.vercel.app',
+        'http://localhost:8000'
     ];
 
 // Middleware

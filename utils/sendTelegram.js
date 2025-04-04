@@ -52,40 +52,136 @@ const sendIPNotification = async (ip, time, userAgent = '', path = '/', extraInf
                 // Làm sạch IP nếu cần (một số IP có thể có port hoặc thông tin khác)
                 const cleanIP = ip.split(":")[0].split(",")[0].trim();
 
-                // Sử dụng geoip-lite để truy vấn thông tin địa lý
-                const geo = geoip.lookup(cleanIP);
+                // Mảng kết quả từ các dịch vụ định vị
+                let locationResults = [];
 
-                if (geo) {
-                    // Định dạng lại tọa độ để có thể click vào mở Google Maps
-                    const latitude = geo.ll?.[0] || 'N/A';
-                    const longitude = geo.ll?.[1] || 'N/A';
+                // 1. Đầu tiên thử với geoip-lite (nhanh và không cần request mạng)
+                try {
+                    const geo = geoip.lookup(cleanIP);
+                    if (geo && geo.ll && geo.ll.length === 2) {
+                        locationResults.push({
+                            source: 'geoip-lite',
+                            city: geo.city || 'N/A',
+                            country: geo.country || 'N/A',
+                            region: geo.region || 'N/A',
+                            latitude: geo.ll[0],
+                            longitude: geo.ll[1],
+                            accuracy: 'low' // Độ chính xác thấp
+                        });
+                    }
+                } catch (err) {
+                    // Bỏ qua lỗi
+                }
+
+                // 2. Thử với ipapi.co 
+                try {
+                    const ipInfo = await axios.get(`https://ipapi.co/${cleanIP}/json/`, {
+                        timeout: 3000
+                    });
+
+                    if (ipInfo.data && ipInfo.data.latitude && ipInfo.data.longitude) {
+                        locationResults.push({
+                            source: 'ipapi.co',
+                            city: ipInfo.data.city || 'N/A',
+                            country: ipInfo.data.country_name || 'N/A',
+                            region: ipInfo.data.region || 'N/A',
+                            latitude: ipInfo.data.latitude,
+                            longitude: ipInfo.data.longitude,
+                            isp: ipInfo.data.org || 'N/A',
+                            accuracy: 'medium' // Độ chính xác trung bình
+                        });
+                    }
+                } catch (err) {
+                    // Bỏ qua lỗi
+                }
+
+                // 3. Thử với ipinfo.io (nếu có token)
+                try {
+                    const ipInfoToken = process.env.IPINFO_TOKEN;
+                    let url = `https://ipinfo.io/${cleanIP}/json`;
+                    if (ipInfoToken) {
+                        url += `?token=${ipInfoToken}`;
+                    }
+
+                    const ipInfoData = await axios.get(url, {
+                        timeout: 3000
+                    });
+
+                    if (ipInfoData.data && ipInfoData.data.loc) {
+                        const [lat, lng] = ipInfoData.data.loc.split(',').map(parseFloat);
+
+                        if (!isNaN(lat) && !isNaN(lng)) {
+                            locationResults.push({
+                                source: 'ipinfo.io',
+                                city: ipInfoData.data.city || 'N/A',
+                                country: ipInfoData.data.country || 'N/A',
+                                region: ipInfoData.data.region || 'N/A',
+                                latitude: lat,
+                                longitude: lng,
+                                isp: ipInfoData.data.org || 'N/A',
+                                accuracy: 'medium-high' // Độ chính xác khá cao
+                            });
+                        }
+                    }
+                } catch (err) {
+                    // Bỏ qua lỗi
+                }
+
+                // 4. Thử với ip-api.com (miễn phí, nhưng có giới hạn request)
+                try {
+                    const ipApiData = await axios.get(`http://ip-api.com/json/${cleanIP}`, {
+                        timeout: 3000
+                    });
+
+                    if (ipApiData.data && ipApiData.data.lat && ipApiData.data.lon) {
+                        locationResults.push({
+                            source: 'ip-api.com',
+                            city: ipApiData.data.city || 'N/A',
+                            country: ipApiData.data.country || 'N/A',
+                            region: ipApiData.data.regionName || 'N/A',
+                            latitude: ipApiData.data.lat,
+                            longitude: ipApiData.data.lon,
+                            isp: ipApiData.data.isp || 'N/A',
+                            accuracy: 'high' // Độ chính xác cao
+                        });
+                    }
+                } catch (err) {
+                    // Bỏ qua lỗi
+                }
+
+                // Chọn kết quả có độ chính xác cao nhất
+                let bestLocation = null;
+                const priorityOrder = ['high', 'medium-high', 'medium', 'low'];
+
+                for (const priority of priorityOrder) {
+                    const found = locationResults.find(loc => loc.accuracy === priority);
+                    if (found) {
+                        bestLocation = found;
+                        break;
+                    }
+                }
+
+                // Nếu không tìm thấy theo độ ưu tiên, lấy kết quả đầu tiên có
+                if (!bestLocation && locationResults.length > 0) {
+                    bestLocation = locationResults[0];
+                }
+
+                if (bestLocation) {
+                    const latitude = bestLocation.latitude;
+                    const longitude = bestLocation.longitude;
                     const locationLink = isValidCoords(latitude, longitude) ?
                         `<a href="https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}">Xem bản đồ</a>` : '';
 
+                    // Thêm nguồn dữ liệu vào thông tin
+                    const sourceInfo = bestLocation.source ? `(${bestLocation.source})` : '';
+
                     locationInfo = `
-📍 <b>Vị trí:</b> ${geo.city || 'N/A'}, ${geo.country || 'N/A'}
-🌍 <b>Khu vực:</b> ${geo.region || 'N/A'}
+📍 <b>Vị trí:</b> ${bestLocation.city || 'N/A'}, ${bestLocation.country || 'N/A'} ${sourceInfo}
+🌍 <b>Khu vực:</b> ${bestLocation.region || 'N/A'}
 🧭 <b>Tọa độ:</b> ${latitude}, ${longitude} ${locationLink}`;
-                } else {
-                    // Nếu không tìm thấy thông tin từ geoip, thử dùng API bên ngoài
-                    try {
-                        const ipInfo = await axios.get(`https://ipapi.co/${cleanIP}/json/`, {
-                            timeout: 3000
-                        });
 
-                        if (ipInfo.data && ipInfo.data.country_name) {
-                            const lat = ipInfo.data.latitude;
-                            const lng = ipInfo.data.longitude;
-                            const locationLink = isValidCoords(lat, lng) ?
-                                `<a href="https://www.google.com/maps/search/?api=1&query=${lat},${lng}">Xem bản đồ</a>` : '';
-
-                            locationInfo = `
-📍 <b>Vị trí:</b> ${ipInfo.data.city || 'N/A'}, ${ipInfo.data.country_name || 'N/A'}
-🌐 <b>ISP:</b> ${ipInfo.data.org || 'N/A'}
-🧭 <b>Tọa độ:</b> ${lat || 'N/A'}, ${lng || 'N/A'} ${locationLink}`;
-                        }
-                    } catch {
-                        // Bỏ qua nếu không thể lấy thông tin
+                    if (bestLocation.isp) {
+                        locationInfo += `\n🌐 <b>ISP:</b> ${bestLocation.isp}`;
                     }
                 }
             }
@@ -199,7 +295,12 @@ function isValidCoords(lat, lng) {
  * @returns {Boolean} - True nếu có thông tin địa chỉ
  */
 function hasAddressInfo(extraInfo) {
-    return extraInfo && (extraInfo.includes('Địa chỉ:') || extraInfo.includes('Chi tiết:'));
+    return extraInfo && (
+        extraInfo.includes('Địa chỉ:') ||
+        extraInfo.includes('Chi tiết:') ||
+        extraInfo.includes('Vị trí từ IP') ||
+        extraInfo.includes('Tọa độ')
+    );
 }
 
 /**
@@ -208,21 +309,54 @@ function hasAddressInfo(extraInfo) {
  * @returns {String} - HTML chứa liên kết đến Google Maps
  */
 function getMapsLink(extraInfo) {
-    // Tìm tọa độ từ extraInfo
-    const coordsMatch = extraInfo.match(/📍 Tọa độ: ([0-9.-]+), ([0-9.-]+)/);
+    // Ưu tiên tìm tọa độ chính xác từ extraInfo
+    const coordsMatch = extraInfo.match(/📍 Tọa độ[^:]*: ([0-9.-]+), ([0-9.-]+)/);
     if (coordsMatch && coordsMatch.length >= 3) {
         const lat = coordsMatch[1];
         const lng = coordsMatch[2];
         if (isValidCoords(lat, lng)) {
-            return `<a href="https://www.google.com/maps?q=${lat},${lng}">🗺️ Xem trên Google Maps</a>`;
+            return `<a href="https://www.google.com/maps?q=${lat},${lng}">🗺️ Xem vị trí chính xác trên Google Maps</a>`;
         }
+    }
+
+    // Nếu không tìm thấy tọa độ chính xác, tìm tọa độ từ IP
+    const ipCoordsMatch = extraInfo.match(/📌 Vị trí từ IP[^:]*: ([0-9.-]+), ([0-9.-]+)/);
+    if (ipCoordsMatch && ipCoordsMatch.length >= 3) {
+        const lat = ipCoordsMatch[1];
+        const lng = ipCoordsMatch[2];
+        if (isValidCoords(lat, lng)) {
+            return `<a href="https://www.google.com/maps?q=${lat},${lng}">🗺️ Xem vị trí IP trên Google Maps</a>`;
+        }
+    }
+
+    // Nếu có địa điểm IP
+    const ipLocationMatch = extraInfo.match(/🏙️ Địa điểm IP: ([^,]+), ([^,\n]+)/);
+    if (ipLocationMatch && ipLocationMatch.length >= 3) {
+        const city = encodeURIComponent(ipLocationMatch[1]);
+        const country = encodeURIComponent(ipLocationMatch[2]);
+        return `<a href="https://www.google.com/maps/search/?api=1&query=${city}+${country}">🗺️ Xem thành phố trên Google Maps</a>`;
     }
 
     // Nếu không có tọa độ nhưng có địa chỉ, tìm địa chỉ
     const addressMatch = extraInfo.match(/🏡 Địa chỉ: (.*?)(?:\n|$)/);
     if (addressMatch && addressMatch.length >= 2) {
         const address = encodeURIComponent(addressMatch[1]);
-        return `<a href="https://www.google.com/maps/search/?api=1&query=${address}">🗺️ Xem trên Google Maps</a>`;
+        return `<a href="https://www.google.com/maps/search/?api=1&query=${address}">🗺️ Xem địa chỉ trên Google Maps</a>`;
+    }
+
+    // Nếu có thông tin chi tiết địa chỉ
+    const detailMatch = extraInfo.match(/📮 Chi tiết: (.*?)(?:\n|$)/);
+    if (detailMatch && detailMatch.length >= 2) {
+        const detail = encodeURIComponent(detailMatch[1]);
+        return `<a href="https://www.google.com/maps/search/?api=1&query=${detail}">🗺️ Xem địa điểm trên Google Maps</a>`;
+    }
+
+    // Nếu có vùng ước tính
+    const regionMatch = extraInfo.match(/🌎 Vùng ước tính: ([^,]+), ([^,\n]+)/);
+    if (regionMatch && regionMatch.length >= 3) {
+        const continent = encodeURIComponent(regionMatch[1]);
+        const city = encodeURIComponent(regionMatch[2]);
+        return `<a href="https://www.google.com/maps/search/?api=1&query=${city}+${continent}">🗺️ Xem vùng ước tính trên Google Maps</a>`;
     }
 
     return '';

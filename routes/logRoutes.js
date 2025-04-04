@@ -91,9 +91,46 @@ router.post('/log-ip', async (req, res) => {
         if (req.body.language) extraInfo.push(`🌐 Ngôn ngữ: ${req.body.language}`);
         if (req.body.timeZone) extraInfo.push(`🕒 Múi giờ: ${req.body.timeZone}`);
 
+        // Thêm thông tin địa lý ước tính từ múi giờ nếu có
+        if (req.body.estimatedContinent && req.body.estimatedCity) {
+            extraInfo.push(`🌎 Vùng ước tính: ${req.body.estimatedContinent}, ${req.body.estimatedCity}`);
+        }
+
+        // Thêm thông tin địa lý ước tính từ ngôn ngữ
+        if (req.body.estimatedCountry) {
+            extraInfo.push(`🏁 Quốc gia ước tính: ${req.body.estimatedCountry}`);
+        }
+
         // Thêm thời gian địa phương của client nếu có
         if (clientTimeFormatted) {
             extraInfo.push(`⏱️ Thời gian địa phương: ${clientTimeFormatted}`);
+        }
+
+        // Xử lý thông tin vị trí từ IP (không cần quyền)
+        if (req.body.ipBasedLatitude && req.body.ipBasedLongitude) {
+            const lat = parseFloat(req.body.ipBasedLatitude);
+            const lng = parseFloat(req.body.ipBasedLongitude);
+
+            // Kiểm tra tọa độ có hợp lệ không
+            if (!isNaN(lat) && !isNaN(lng) &&
+                lat >= -90 && lat <= 90 &&
+                lng >= -180 && lng <= 180) {
+
+                // Làm tròn tọa độ để bảo vệ quyền riêng tư
+                const roundedLat = parseFloat(lat.toFixed(4));
+                const roundedLng = parseFloat(lng.toFixed(4));
+
+                extraInfo.push(`📌 Vị trí từ IP (${req.body.ipBasedSource || 'không rõ nguồn'}): ${roundedLat}, ${roundedLng}`);
+
+                // Thêm thông tin chi tiết về vị trí nếu có
+                if (req.body.ipBasedCity && req.body.ipBasedCountry) {
+                    extraInfo.push(`🏙️ Địa điểm IP: ${req.body.ipBasedCity}, ${req.body.ipBasedCountry}`);
+                }
+
+                if (req.body.ipBasedOrg) {
+                    extraInfo.push(`🌐 Tổ chức: ${req.body.ipBasedOrg}`);
+                }
+            }
         }
 
         // Xử lý tọa độ từ client (có độ chính xác cao hơn IP lookup)
@@ -110,7 +147,8 @@ router.post('/log-ip', async (req, res) => {
                 const roundedLat = parseFloat(lat.toFixed(6));
                 const roundedLng = parseFloat(lng.toFixed(6));
 
-                extraInfo.push(`📍 Tọa độ: ${roundedLat}, ${roundedLng}`);
+                const source = req.body.locationSource || 'không rõ';
+                extraInfo.push(`📍 Tọa độ (${source}): ${roundedLat}, ${roundedLng}`);
 
                 // Thêm thông tin độ chính xác nếu có
                 if (req.body.accuracy && !isNaN(req.body.accuracy)) {
@@ -135,6 +173,13 @@ router.post('/log-ip', async (req, res) => {
                     }
                 }
             }
+        }
+
+        // Ghi nhận lỗi nếu người dùng từ chối cấp quyền vị trí
+        if (req.body.geolocationError === 1) {
+            extraInfo.push(`❌ Người dùng từ chối cấp quyền vị trí: ${req.body.geolocationErrorMessage || 'Permission denied'}`);
+        } else if (req.body.geolocationError) {
+            extraInfo.push(`⚠️ Lỗi lấy vị trí: ${req.body.geolocationErrorMessage || 'Unknown error'}`);
         }
 
         // Thêm thông tin địa chỉ nếu có

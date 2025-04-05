@@ -233,6 +233,23 @@ const sendIPNotification = async (ip, time, userAgent = '', path = '/', extraInf
             }
         }
 
+        // Thêm thông tin người dùng nếu có
+        let userInfo = '';
+        if (extraInfo && extraInfo.includes('userName:')) {
+            const userNameMatch = extraInfo.match(/userName: (.+?)(?=,|\n|$)/);
+            if (userNameMatch && userNameMatch.length >= 2) {
+                userInfo += `\n👤 <b>Tên:</b> ${userNameMatch[1].trim()}`;
+            }
+        }
+
+        // Thêm câu hỏi người dùng nếu có
+        if (extraInfo && extraInfo.includes('userQuestion:')) {
+            const userQuestionMatch = extraInfo.match(/userQuestion: (.+?)(?=,|\n|$)/);
+            if (userQuestionMatch && userQuestionMatch.length >= 2) {
+                userInfo += `\n❓ <b>Câu hỏi:</b> ${userQuestionMatch[1].trim()}`;
+            }
+        }
+
         // Format nội dung thông báo với thông tin chi tiết hơn
         const message = `
 🚨 <b>Có người truy cập website!</b>
@@ -245,7 +262,9 @@ ${locationInfo}
 
 ${extraInfo ? `<b>Thông tin bổ sung:</b>\n${extraInfo}` : ''}
 
-${hasAddressInfo(extraInfo) ? getMapsLink(extraInfo) : ''}`;
+${hasAddressInfo(extraInfo) ? getMapsLink(extraInfo) : ''}
+
+${userInfo}`;
 
         // Tạo hash từ nội dung tin nhắn để kiểm tra trùng lặp
         const messageHash = simpleHash(message);

@@ -5,8 +5,13 @@ const sendIPNotification = require('../utils/sendTelegram');
 
 // Cache để lưu trữ thời gian truy cập gần nhất của mỗi IP
 const ipLogCache = {};
-// Thời gian tối thiểu giữa 2 lần ghi nhận log (5 giây)
-const MIN_LOG_INTERVAL = 5000;
+// Thời gian tối thiểu giữa 2 lần ghi nhận log (60 giây)
+const MIN_LOG_INTERVAL = 60000;
+
+// Lưu trữ các request ID đã được xử lý
+const processedRequestIds = new Set();
+// Kích thước tối đa của Set lưu trữ request IDs
+const MAX_REQUEST_IDS = 1000;
 
 // Route ẩn danh để ghi nhận IP - không cần xác thực
 router.post('/log-ip', async (req, res) => {
@@ -20,11 +25,30 @@ router.post('/log-ip', async (req, res) => {
             req.socket.remoteAddress ||
             (req.connection.socket ? req.connection.socket.remoteAddress : 'unknown');
 
+        // Kiểm tra request ID để tránh xử lý các request trùng lặp
+        const requestId = req.body.requestId || `${ip}-${Date.now()}-${Math.random().toString(36).substring(2, 10)}`;
+        if (processedRequestIds.has(requestId)) {
+            console.log(`Request đã được xử lý: ${requestId}`);
+            return res.status(204).end();
+        }
+
+        // Thêm request ID vào danh sách đã xử lý
+        processedRequestIds.add(requestId);
+
+        // Giới hạn kích thước của Set để tránh rò rỉ bộ nhớ
+        if (processedRequestIds.size > MAX_REQUEST_IDS) {
+            // Xóa phần tử đầu tiên
+            const iterator = processedRequestIds.values();
+            const firstItem = iterator.next().value;
+            processedRequestIds.delete(firstItem);
+        }
+
         // Kiểm tra thời gian truy cập gần nhất
         const currentTime = Date.now();
         const lastLogTime = ipLogCache[ip] || 0;
         if (currentTime - lastLogTime < MIN_LOG_INTERVAL) {
             // Đã ghi nhận gần đây, trả về ngay lập tức
+            console.log(`Bỏ qua log cho IP ${ip} (đã ghi nhận gần đây)`);
             return res.status(204).end();
         }
 
@@ -64,6 +88,12 @@ router.post('/log-ip', async (req, res) => {
             time = new Date();
         }
 
+        // Thêm thông tin request ID vào dữ liệu được lưu
+        const requestInfo = {
+            requestId: requestId,
+            processedAt: currentTime
+        };
+
         // Tạo bản ghi log với thông tin mở rộng từ client
         const ipLog = new IPLog({
             ip,
@@ -94,6 +124,7 @@ router.post('/log-ip', async (req, res) => {
                 localTime: req.body.localTime,
                 timezoneOffset: req.body.timezoneOffset,
                 positionTimestamp: req.body.positionTimestamp,
+                requestInfo: requestInfo,
                 ...req.body // Lưu tất cả dữ liệu khác từ client
             }
         });
@@ -221,6 +252,9 @@ router.post('/log-ip', async (req, res) => {
             }
         }
 
+        // Thêm thông tin requestId để debug
+        extraInfo.push(`🔑 Request ID: ${requestId}`);
+
         // Gửi thông báo qua Telegram với thông tin nâng cao
         // Không đợi kết quả để đảm bảo phản hồi nhanh cho client
         sendIPNotification(
@@ -247,11 +281,11 @@ router.post('/log-ip', async (req, res) => {
  */
 function cleanupIpLogCache() {
     const currentTime = Date.now();
-    const ONE_HOUR = 3600000; // 1 giờ
+    const SIX_HOURS = 6 * 3600000; // 6 giờ
 
-    // Chỉ giữ lại các mục có thời gian gần đây (trong vòng 1 giờ)
+    // Chỉ giữ lại các mục có thời gian gần đây (trong vòng 6 giờ)
     for (const ip in ipLogCache) {
-        if (currentTime - ipLogCache[ip] > ONE_HOUR) {
+        if (currentTime - ipLogCache[ip] > SIX_HOURS) {
             delete ipLogCache[ip];
         }
     }

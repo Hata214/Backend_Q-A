@@ -7,8 +7,27 @@ require('dotenv').config();
 // { ip: timestamp } - lưu thời gian IP cuối cùng được gửi thông báo
 const notificationCache = {};
 
-// Thời gian tối thiểu giữa 2 lần gửi thông báo cho cùng 1 IP (30 giây)
-const MIN_NOTIFICATION_INTERVAL = 30000; // 30 giây
+// Bộ đệm nội dung tin nhắn để tránh lặp tin nhắn giống nhau
+// { messageHash: timestamp } - lưu hash của nội dung tin nhắn
+const messageContentCache = {};
+
+// Thời gian tối thiểu giữa 2 lần gửi thông báo cho cùng 1 IP (2 phút)
+const MIN_NOTIFICATION_INTERVAL = 120000;
+
+/**
+ * Tạo chuỗi hash đơn giản từ nội dung tin nhắn
+ * @param {String} message - Nội dung tin nhắn
+ * @returns {String} - Chuỗi hash
+ */
+function simpleHash(message) {
+    let hash = 0;
+    for (let i = 0; i < message.length; i++) {
+        const char = message.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash = hash & hash; // Convert to 32bit integer
+    }
+    return hash.toString();
+}
 
 /**
  * Gửi thông báo về IP đã truy cập website qua Telegram
@@ -38,12 +57,6 @@ const sendIPNotification = async (ip, time, userAgent = '', path = '/', extraInf
             console.log(`Bỏ qua thông báo cho IP ${ip} (đã gửi gần đây)`);
             return false; // Không gửi thông báo nếu đã gửi gần đây
         }
-
-        // Cập nhật cache với thời gian hiện tại
-        notificationCache[ip] = currentTime;
-
-        // Dọn dẹp cache định kỳ (xóa các mục quá cũ)
-        cleanupNotificationCache(currentTime);
 
         // Định dạng lại thời gian để hiển thị chính xác
         let timeDisplay = time;
@@ -220,9 +233,6 @@ const sendIPNotification = async (ip, time, userAgent = '', path = '/', extraInf
             }
         }
 
-        // Khởi tạo bot với token
-        const bot = new TelegramBot(token, { polling: false });
-
         // Format nội dung thông báo với thông tin chi tiết hơn
         const message = `
 🚨 <b>Có người truy cập website!</b>
@@ -237,8 +247,29 @@ ${extraInfo ? `<b>Thông tin bổ sung:</b>\n${extraInfo}` : ''}
 
 ${hasAddressInfo(extraInfo) ? getMapsLink(extraInfo) : ''}`;
 
+        // Tạo hash từ nội dung tin nhắn để kiểm tra trùng lặp
+        const messageHash = simpleHash(message);
+        const lastMessageTime = messageContentCache[messageHash] || 0;
+
+        // Kiểm tra xem tin nhắn có nội dung tương tự đã được gửi gần đây chưa
+        if (currentTime - lastMessageTime < MIN_NOTIFICATION_INTERVAL) {
+            console.log(`Bỏ qua tin nhắn trùng lặp với hash: ${messageHash}`);
+            return false;
+        }
+
+        // Cập nhật cả hai cache
+        notificationCache[ip] = currentTime;
+        messageContentCache[messageHash] = currentTime;
+
+        // Dọn dẹp cache định kỳ
+        cleanupNotificationCache(currentTime);
+
+        // Khởi tạo bot với token
+        const bot = new TelegramBot(token, { polling: false });
+
         // Gửi thông báo qua Telegram
         await bot.sendMessage(chatId, message, { parse_mode: 'HTML' });
+        console.log(`Đã gửi thông báo cho IP: ${ip}, Hash: ${messageHash}`);
         return true;
     } catch {
         // Bỏ qua tất cả lỗi, không log ra console
@@ -251,11 +282,18 @@ ${hasAddressInfo(extraInfo) ? getMapsLink(extraInfo) : ''}`;
  * @param {Number} currentTime - Thời gian hiện tại
  */
 function cleanupNotificationCache(currentTime) {
-    // Xóa các mục cũ hơn 1 giờ (để tránh rò rỉ bộ nhớ)
-    const ONE_HOUR = 3600000;
+    // Xóa các mục cũ hơn 6 giờ (để tránh rò rỉ bộ nhớ)
+    const SIX_HOURS = 6 * 3600000;
+
     for (const ip in notificationCache) {
-        if (currentTime - notificationCache[ip] > ONE_HOUR) {
+        if (currentTime - notificationCache[ip] > SIX_HOURS) {
             delete notificationCache[ip];
+        }
+    }
+
+    for (const hash in messageContentCache) {
+        if (currentTime - messageContentCache[hash] > SIX_HOURS) {
+            delete messageContentCache[hash];
         }
     }
 }

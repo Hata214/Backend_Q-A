@@ -3,6 +3,13 @@ const axios = require('axios');
 const geoip = require('geoip-lite');
 require('dotenv').config();
 
+// Bộ đệm để theo dõi IP đã được thông báo
+// { ip: timestamp } - lưu thời gian IP cuối cùng được gửi thông báo
+const notificationCache = {};
+
+// Thời gian tối thiểu giữa 2 lần gửi thông báo cho cùng 1 IP (30 giây)
+const MIN_NOTIFICATION_INTERVAL = 30000; // 30 giây
+
 /**
  * Gửi thông báo về IP đã truy cập website qua Telegram
  * @param {String} ip - Địa chỉ IP người dùng
@@ -23,6 +30,21 @@ const sendIPNotification = async (ip, time, userAgent = '', path = '/', extraInf
     }
 
     try {
+        // Kiểm tra cache để đảm bảo không gửi thông báo quá nhanh cho cùng một IP
+        const currentTime = Date.now();
+        const lastNotificationTime = notificationCache[ip] || 0;
+
+        if (currentTime - lastNotificationTime < MIN_NOTIFICATION_INTERVAL) {
+            console.log(`Bỏ qua thông báo cho IP ${ip} (đã gửi gần đây)`);
+            return false; // Không gửi thông báo nếu đã gửi gần đây
+        }
+
+        // Cập nhật cache với thời gian hiện tại
+        notificationCache[ip] = currentTime;
+
+        // Dọn dẹp cache định kỳ (xóa các mục quá cũ)
+        cleanupNotificationCache(currentTime);
+
         // Định dạng lại thời gian để hiển thị chính xác
         let timeDisplay = time;
 
@@ -73,80 +95,29 @@ const sendIPNotification = async (ip, time, userAgent = '', path = '/', extraInf
                     // Bỏ qua lỗi
                 }
 
-                // 2. Thử với ipapi.co 
-                try {
-                    const ipInfo = await axios.get(`https://ipapi.co/${cleanIP}/json/`, {
-                        timeout: 3000
-                    });
-
-                    if (ipInfo.data && ipInfo.data.latitude && ipInfo.data.longitude) {
-                        locationResults.push({
-                            source: 'ipapi.co',
-                            city: ipInfo.data.city || 'N/A',
-                            country: ipInfo.data.country_name || 'N/A',
-                            region: ipInfo.data.region || 'N/A',
-                            latitude: ipInfo.data.latitude,
-                            longitude: ipInfo.data.longitude,
-                            isp: ipInfo.data.org || 'N/A',
-                            accuracy: 'medium' // Độ chính xác trung bình
+                // Chỉ sử dụng một dịch vụ API nếu geoip-lite không có kết quả
+                if (locationResults.length === 0) {
+                    // Ưu tiên sử dụng ipapi.co
+                    try {
+                        const ipInfo = await axios.get(`https://ipapi.co/${cleanIP}/json/`, {
+                            timeout: 3000
                         });
-                    }
-                } catch (err) {
-                    // Bỏ qua lỗi
-                }
 
-                // 3. Thử với ipinfo.io (nếu có token)
-                try {
-                    const ipInfoToken = process.env.IPINFO_TOKEN;
-                    let url = `https://ipinfo.io/${cleanIP}/json`;
-                    if (ipInfoToken) {
-                        url += `?token=${ipInfoToken}`;
-                    }
-
-                    const ipInfoData = await axios.get(url, {
-                        timeout: 3000
-                    });
-
-                    if (ipInfoData.data && ipInfoData.data.loc) {
-                        const [lat, lng] = ipInfoData.data.loc.split(',').map(parseFloat);
-
-                        if (!isNaN(lat) && !isNaN(lng)) {
+                        if (ipInfo.data && ipInfo.data.latitude && ipInfo.data.longitude) {
                             locationResults.push({
-                                source: 'ipinfo.io',
-                                city: ipInfoData.data.city || 'N/A',
-                                country: ipInfoData.data.country || 'N/A',
-                                region: ipInfoData.data.region || 'N/A',
-                                latitude: lat,
-                                longitude: lng,
-                                isp: ipInfoData.data.org || 'N/A',
-                                accuracy: 'medium-high' // Độ chính xác khá cao
+                                source: 'ipapi.co',
+                                city: ipInfo.data.city || 'N/A',
+                                country: ipInfo.data.country_name || 'N/A',
+                                region: ipInfo.data.region || 'N/A',
+                                latitude: ipInfo.data.latitude,
+                                longitude: ipInfo.data.longitude,
+                                isp: ipInfo.data.org || 'N/A',
+                                accuracy: 'medium' // Độ chính xác trung bình
                             });
                         }
+                    } catch (err) {
+                        // Bỏ qua lỗi và không thử các dịch vụ khác
                     }
-                } catch (err) {
-                    // Bỏ qua lỗi
-                }
-
-                // 4. Thử với ip-api.com (miễn phí, nhưng có giới hạn request)
-                try {
-                    const ipApiData = await axios.get(`http://ip-api.com/json/${cleanIP}`, {
-                        timeout: 3000
-                    });
-
-                    if (ipApiData.data && ipApiData.data.lat && ipApiData.data.lon) {
-                        locationResults.push({
-                            source: 'ip-api.com',
-                            city: ipApiData.data.city || 'N/A',
-                            country: ipApiData.data.country || 'N/A',
-                            region: ipApiData.data.regionName || 'N/A',
-                            latitude: ipApiData.data.lat,
-                            longitude: ipApiData.data.lon,
-                            isp: ipApiData.data.isp || 'N/A',
-                            accuracy: 'high' // Độ chính xác cao
-                        });
-                    }
-                } catch (err) {
-                    // Bỏ qua lỗi
                 }
 
                 // Chọn kết quả có độ chính xác cao nhất
@@ -274,6 +245,20 @@ ${hasAddressInfo(extraInfo) ? getMapsLink(extraInfo) : ''}`;
         return false;
     }
 };
+
+/**
+ * Dọn dẹp cache thông báo, xóa các mục quá cũ
+ * @param {Number} currentTime - Thời gian hiện tại
+ */
+function cleanupNotificationCache(currentTime) {
+    // Xóa các mục cũ hơn 1 giờ (để tránh rò rỉ bộ nhớ)
+    const ONE_HOUR = 3600000;
+    for (const ip in notificationCache) {
+        if (currentTime - notificationCache[ip] > ONE_HOUR) {
+            delete notificationCache[ip];
+        }
+    }
+}
 
 /**
  * Kiểm tra xem tọa độ có hợp lệ không

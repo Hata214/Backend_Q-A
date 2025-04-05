@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const IPLog = require('../models/IPLog');
 const sendIPNotification = require('../utils/sendTelegram');
+const axios = require('axios');
 
 // Cache để lưu trữ thời gian truy cập gần nhất của mỗi IP
 const ipLogCache = {};
@@ -262,6 +263,113 @@ router.get('/ip-logs', async (req, res) => {
         res.status(200).json(logs);
     } catch (error) {
         res.status(404).json({ message: 'Not found' });
+    }
+});
+
+// Route để lấy vị trí dựa trên IP từ backend (giúp tránh CORS)
+router.post('/get-ip-location', async (req, res) => {
+    try {
+        // Lấy IP từ các header khác nhau, ưu tiên từ proxy headers
+        const ip = req.headers['x-forwarded-for'] ||
+            req.headers['x-real-ip'] ||
+            req.headers['cf-connecting-ip'] ||
+            req.headers['true-client-ip'] ||
+            req.connection.remoteAddress ||
+            req.socket.remoteAddress ||
+            (req.connection.socket ? req.connection.socket.remoteAddress : 'unknown');
+
+        // Thử lấy vị trí từ ipinfo.io
+        try {
+            const ipInfoResponse = await axios.get('https://ipinfo.io/json', {
+                timeout: 3000
+            });
+
+            if (ipInfoResponse.data && ipInfoResponse.data.loc) {
+                const [lat, lon] = ipInfoResponse.data.loc.split(',');
+
+                return res.json({
+                    success: true,
+                    location: {
+                        latitude: parseFloat(lat),
+                        longitude: parseFloat(lon),
+                        city: ipInfoResponse.data.city,
+                        region: ipInfoResponse.data.region,
+                        country: ipInfoResponse.data.country,
+                        timezone: ipInfoResponse.data.timezone,
+                        org: ipInfoResponse.data.org,
+                        postal: ipInfoResponse.data.postal,
+                        source: 'ipinfo.io',
+                        address: `${ipInfoResponse.data.city}, ${ipInfoResponse.data.region}, ${ipInfoResponse.data.country}`
+                    }
+                });
+            }
+        } catch (error) {
+            console.log('Lỗi khi gọi ipinfo.io:', error.message);
+        }
+
+        // Nếu ipinfo.io thất bại, thử với ipapi.co
+        try {
+            const ipapiResponse = await axios.get('https://ipapi.co/json/', {
+                timeout: 3000
+            });
+
+            if (ipapiResponse.data && ipapiResponse.data.latitude && ipapiResponse.data.longitude) {
+                return res.json({
+                    success: true,
+                    location: {
+                        latitude: ipapiResponse.data.latitude,
+                        longitude: ipapiResponse.data.longitude,
+                        city: ipapiResponse.data.city,
+                        region: ipapiResponse.data.region,
+                        country: ipapiResponse.data.country_name,
+                        country_code: ipapiResponse.data.country,
+                        org: ipapiResponse.data.org,
+                        source: 'ipapi.co',
+                        address: `${ipapiResponse.data.city}, ${ipapiResponse.data.region}, ${ipapiResponse.data.country_name}`
+                    }
+                });
+            }
+        } catch (error) {
+            console.log('Lỗi khi gọi ipapi.co:', error.message);
+        }
+
+        // Cuối cùng thử với ip-api.com
+        try {
+            const ipApiResponse = await axios.get('http://ip-api.com/json/', {
+                timeout: 3000
+            });
+
+            if (ipApiResponse.data && ipApiResponse.data.lat && ipApiResponse.data.lon) {
+                return res.json({
+                    success: true,
+                    location: {
+                        latitude: ipApiResponse.data.lat,
+                        longitude: ipApiResponse.data.lon,
+                        city: ipApiResponse.data.city,
+                        region: ipApiResponse.data.regionName,
+                        country: ipApiResponse.data.country,
+                        country_code: ipApiResponse.data.countryCode,
+                        isp: ipApiResponse.data.isp,
+                        source: 'ip-api.com',
+                        address: `${ipApiResponse.data.city}, ${ipApiResponse.data.regionName}, ${ipApiResponse.data.country}`
+                    }
+                });
+            }
+        } catch (error) {
+            console.log('Lỗi khi gọi ip-api.com:', error.message);
+        }
+
+        // Nếu tất cả các cách đều thất bại
+        res.json({
+            success: false,
+            message: 'Không thể lấy thông tin vị trí từ IP'
+        });
+    } catch (error) {
+        console.error('Lỗi khi lấy vị trí từ IP:', error.message);
+        res.status(500).json({
+            success: false,
+            message: 'Lỗi server khi lấy vị trí từ IP'
+        });
     }
 });
 
